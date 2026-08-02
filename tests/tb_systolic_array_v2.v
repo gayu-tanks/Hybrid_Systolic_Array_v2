@@ -252,8 +252,10 @@ module tb_systolic_array_v2;
             end
             if (fail_count == 0)
                 $display("  PASS (all %0d results within %.0f%%)", N*N, tol_pct);
-            else
+            else begin
                 $display("  FAIL: %0d/%0d results out of tolerance", fail_count, N*N);
+                modes_failed = modes_failed + 1;
+            end
         end
     endtask
 
@@ -281,11 +283,62 @@ module tb_systolic_array_v2;
     endtask
 
     // ----------------------------------------------------------------
+    // Vector-load guard
+    //
+    // $readmemh leaves a memory *untouched* when the file cannot be opened,
+    // so a run from the wrong working directory would compare uninitialised
+    // data against uninitialised data and report PASS. Poison the memories
+    // with X before each load, then confirm every entry was overwritten.
+    // ----------------------------------------------------------------
+    integer load_errors;
+    integer modes_failed;
+
+    task poison_mems;
+        integer i;
+        begin
+            for (i = 0; i < N*N; i = i+1) begin
+                act_mem[i]  = 16'hxxxx;
+                wt_mem[i]   = 16'hxxxx;
+                gold_mem[i] = 16'hxxxx;
+            end
+        end
+    endtask
+
+    task verify_loaded;
+        input [8*16-1:0] tag;
+        integer i;
+        begin
+            load_errors = 0;
+            for (i = 0; i < N*N; i = i+1) begin
+                if (^act_mem[i]  === 1'bx) load_errors = load_errors + 1;
+                if (^wt_mem[i]   === 1'bx) load_errors = load_errors + 1;
+                if (^gold_mem[i] === 1'bx) load_errors = load_errors + 1;
+            end
+            if (load_errors != 0) begin
+                $display("");
+                $display("  *** VECTOR LOAD FAILED for %0s ***", tag);
+                $display("  %0d of %0d entries were never initialised.",
+                         load_errors, 3*N*N);
+                $display("");
+                $display("  The testbench reads ../vectors/*.hex relative to the");
+                $display("  current directory, so it must be run from tests/:");
+                $display("      cd tests && vvp sim_v2");
+                $display("");
+                $display("  If the vectors do not exist yet, generate them first:");
+                $display("      (cd vectors && python3 gen_vectors.py)");
+                $display("");
+                $fatal(1, "aborting: refusing to report PASS on unloaded data");
+            end
+        end
+    endtask
+
+    // ----------------------------------------------------------------
     // Main
     // ----------------------------------------------------------------
     initial begin
         $dumpfile("tb_systolic_array_v2.vcd");
         $dumpvars(0, tb_systolic_array_v2);
+        modes_failed = 0;
 
         log_fd = $fopen("../vectors/hw_output_log.txt", "w");
         $fdisplay(log_fd, "Hybrid Systolic Array v2 — Hardware Output Log");
@@ -297,54 +350,66 @@ module tb_systolic_array_v2;
 
         // --- Mode 001: BF16×BF16 ---
         $display("\n=== Mode 3'b001 (BF16 x BF16) ===");
+        poison_mems;
         $readmemh("../vectors/act_bf16_bf16.hex",  act_mem);
         $readmemh("../vectors/wt_bf16_bf16.hex",   wt_mem);
         $readmemh("../vectors/gold_bf16_bf16.hex", gold_mem);
+        verify_loaded("bf16_bf16");
         setup_and_run(3'b001);
         check_results(2.0);
         write_output("bf16_bf16", 3'b001);
 
         // --- Mode 010: BF16×INT8 ---
         $display("\n=== Mode 3'b010 (BF16 x INT8) ===");
+        poison_mems;
         $readmemh("../vectors/act_bf16_int8.hex",  act_mem);
         $readmemh("../vectors/wt_bf16_int8.hex",   wt_mem);
         $readmemh("../vectors/gold_bf16_int8.hex", gold_mem);
+        verify_loaded("bf16_int8");
         setup_and_run(3'b010);
         check_results(5.0);
         write_output("bf16_int8", 3'b010);
 
         // --- Mode 011: BF16×INT4 ---
         $display("\n=== Mode 3'b011 (BF16 x INT4) ===");
+        poison_mems;
         $readmemh("../vectors/act_bf16_int4.hex",  act_mem);
         $readmemh("../vectors/wt_bf16_int4.hex",   wt_mem);
         $readmemh("../vectors/gold_bf16_int4.hex", gold_mem);
+        verify_loaded("bf16_int4");
         setup_and_run(3'b011);
         check_results(15.0);
         write_output("bf16_int4", 3'b011);
 
         // --- Mode 100: INT4×INT4 ---
         $display("\n=== Mode 3'b100 (INT4 x INT4) ===");
+        poison_mems;
         $readmemh("../vectors/act_int4_int4.hex",  act_mem);
         $readmemh("../vectors/wt_int4_int4.hex",   wt_mem);
         $readmemh("../vectors/gold_int4_int4.hex", gold_mem);
+        verify_loaded("int4_int4");
         setup_and_run(3'b100);
         check_results(0.1);
         write_output("int4_int4", 3'b100);
 
         // --- Mode 101: INT8×INT4 ---
         $display("\n=== Mode 3'b101 (INT8 x INT4) ===");
+        poison_mems;
         $readmemh("../vectors/act_int8_int4.hex",  act_mem);
         $readmemh("../vectors/wt_int8_int4.hex",   wt_mem);
         $readmemh("../vectors/gold_int8_int4.hex", gold_mem);
+        verify_loaded("int8_int4");
         setup_and_run(3'b101);
         check_results(0.1);
         write_output("int8_int4", 3'b101);
 
         // --- Mode 110: INT8×INT8 ---
         $display("\n=== Mode 3'b110 (INT8 x INT8) ===");
+        poison_mems;
         $readmemh("../vectors/act_int8_int8.hex",  act_mem);
         $readmemh("../vectors/wt_int8_int8.hex",   wt_mem);
         $readmemh("../vectors/gold_int8_int8.hex", gold_mem);
+        verify_loaded("int8_int8");
         setup_and_run(3'b110);
         check_results(0.1);
         write_output("int8_int8", 3'b110);
@@ -354,6 +419,12 @@ module tb_systolic_array_v2;
         $display("Output files written to vectors/:");
         $display("  hw_output_log.txt        — combined log (hex + float + error)");
         $display("  hw_<mode>.hex            — per-mode hex (diff against gold_<mode>.hex)");
+
+        if (modes_failed != 0) begin
+            $display("\nRESULT: %0d of 6 modes FAILED", modes_failed);
+            $fatal(1, "functional testbench failed");
+        end
+        $display("\nRESULT: all 6 modes PASSED");
         $finish;
     end
 

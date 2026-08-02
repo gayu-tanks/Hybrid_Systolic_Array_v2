@@ -71,10 +71,17 @@ Each mode has a fixed cycle count measured by the hardware `cycle_count` registe
 
 ## How to Run
 
+> **All commands below are run from the repository root.** Each step is
+> self-contained — the `( … )` subshells return you to the root when they finish,
+> so the four blocks can be pasted in order.
+>
+> The simulation itself **must** run with `tests/` as the working directory: the
+> testbench opens `../vectors/*.hex` by relative path. Running `vvp tests/sim_v2`
+> from the root instead will abort with a vector-load error.
+
 **Step 1 — Generate test vectors**
 ```bash
-cd vectors/
-python3 gen_vectors.py
+(cd vectors && python3 gen_vectors.py)
 ```
 Creates `act_<mode>.hex`, `wt_<mode>.hex`, and `gold_<mode>.hex` for all 6 modes.
 
@@ -91,8 +98,10 @@ iverilog -g2005 -o tests/sim_v2 \
 
 **Step 3 — Run functional simulation**
 ```bash
-cd tests && vvp sim_v2
+(cd tests && vvp sim_v2)
 ```
+Exits **0** only if all 6 modes pass; exits **1** on any tolerance failure or if
+the test vectors fail to load.
 
 **Step 4 — Compile and run power testbench**
 ```bash
@@ -103,8 +112,42 @@ iverilog -g2005 -o tests/sim_v2_power \
     rtl/output_post_processor_v2.v \
     rtl/systolic_array_v2_top.v \
     tests/tb_systolic_array_v2_power.v
-cd tests && vvp sim_v2_power
+
+(cd tests && vvp sim_v2_power)
 ```
+
+**Step 5 — View waveforms (optional)**
+```bash
+gtkwave tests/tb_systolic_array_v2.vcd &     # functional run
+gtkwave tests/power_sim_v2.vcd &             # power run
+```
+Both VCDs are written by the testbenches during Steps 3 and 4 via
+`$dumpfile`/`$dumpvars`, so re-run those after any RTL change to refresh them.
+
+The window opens empty. Expand `tb_systolic_array_v2` → `dut` in the hierarchy
+panel, select signals, press **Insert** to add them, then `Ctrl+Alt+F` to fit the
+full run. A useful starting set under `tb_systolic_array_v2.dut`:
+
+```
+clk, rst, start, busy, done
+mode[2:0]            (right-click → Data Format → Binary)
+cycle_count[15:0]
+bf16_result[15:0], result_valid
+```
+
+All six modes share one file, so track `mode[2:0]` to locate a given mode's window:
+`001` → `010` → `011` → `100` → `101` → `110`.
+
+For deeper debug, the scope paths are:
+
+| Block | Path |
+|---|---|
+| PE (row `i`, col `j`) | `tb_systolic_array_v2.dut.u_sa.gen_row[i].gen_col[j].u_pe` |
+| Its 4×4 multiplier | `…gen_col[j].u_pe.u_mult` |
+| Output post-processor (row `i`) | `tb_systolic_array_v2.dut.gen_pp[i].u_pp` |
+
+Watching `mult_cnt` inside `u_mult` shows the multiplier stepping through its L
+passes (L = 4, 2, or 1 depending on mode — see the mode table above).
 
 ---
 
@@ -135,13 +178,35 @@ cd tests && vvp sim_v2_power
   Cycle count: 77
   PASS (all 64 results within 0%)
 
+All modes done.
 Output files written to vectors/:
   hw_output_log.txt        — combined log (hex + float + error)
   hw_<mode>.hex            — per-mode hex (diff against gold_<mode>.hex)
+
+RESULT: all 6 modes PASSED
 ```
 
 Pass/fail tolerances reflect inherent EHU precision loss in BF16 modes;
 INT×INT modes are numerically exact.
+
+### Vector-load guard
+
+`$readmemh` leaves a memory untouched when the file cannot be opened, so running
+the simulation from the wrong directory would otherwise compare uninitialised data
+against uninitialised data and report **PASS** on all six modes. The testbench
+poisons `act_mem`/`wt_mem`/`gold_mem` with `X` before each load and verifies every
+entry was overwritten, aborting with exit code 1 if not:
+
+```
+  *** VECTOR LOAD FAILED for bf16_bf16 ***
+  192 of 192 entries were never initialised.
+
+  The testbench reads ../vectors/*.hex relative to the
+  current directory, so it must be run from tests/:
+      cd tests && vvp sim_v2
+```
+
+This catches both a missing file and a truncated/partial one.
 
 ## Manual Output Comparison
 
